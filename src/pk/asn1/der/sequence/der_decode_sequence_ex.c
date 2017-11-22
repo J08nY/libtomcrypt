@@ -80,20 +80,6 @@ int der_decode_sequence_ex(const unsigned char *in, unsigned long  inlen,
           break;
        }
 
-       /* handle context specific tags - just skip the tag + len bytes */
-       z = 0;
-       if (list[i].tag > 0 && list[i].tag == in[x + z++]) {
-         if (in[x+z] & 0x80) {
-            y = in[x + z++] & 0x7F;
-            if (y == 0 || y > 2) { return CRYPT_INVALID_PACKET; }
-            z += y;
-         } else {
-            z++;
-         }
-         x     += z;
-         inlen -= z;
-       }
-
        switch (type) {
            case LTC_ASN1_BOOLEAN:
                z = inlen;
@@ -280,6 +266,16 @@ int der_decode_sequence_ex(const unsigned char *in, unsigned long  inlen,
                }
                break;
 
+           case LTC_ASN1_CUSTOM_TYPE:
+               z = inlen;
+               if ((err = der_decode_custom_type(in + x, z, &list[i])) != CRYPT_OK) {
+                  if (!ordered || list[i].optional) { continue; }
+                  goto LBL_ERR;
+               }
+               if ((err = der_length_custom_type(&list[i], &z, NULL)) != CRYPT_OK) {
+                  goto LBL_ERR;
+               }
+               break;
 
            case LTC_ASN1_CHOICE:
                z = inlen;

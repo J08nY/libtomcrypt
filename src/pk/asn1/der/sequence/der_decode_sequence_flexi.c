@@ -44,7 +44,7 @@ static int _new_element(ltc_asn1_list **l)
 int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc_asn1_list **out)
 {
    ltc_asn1_list *l;
-   unsigned long err, type, len, totlen, data_offset;
+   unsigned long err, identifier, len, totlen, data_offset, id_len, len_len;
    void          *realloc_tmp;
 
    LTC_ARGCHK(in    != NULL);
@@ -63,40 +63,50 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
 
    /* scan the input and and get lengths and what not */
    while (*inlen) {
-      /* read the type byte */
-      type = *in;
-
-      /* fetch length */
-      data_offset = *inlen;
-      if ((err = der_decode_asn1_length(in, &data_offset, &len)) != CRYPT_OK) {
-         goto error;
-      } else if (len > *inlen) {
-         err = CRYPT_INVALID_PACKET;
-         goto error;
-      }
-
       /* alloc new link */
       if ((err = _new_element(&l)) != CRYPT_OK) {
          goto error;
       }
 
-      if ((type & 0x20) && (type != 0x30) && (type != 0x31)) {
-         /* constructed, use the 'used' field to store the original identifier */
-         l->used = type;
-         /* treat constructed elements like SETs */
-         type = 0x20;
+      id_len = *inlen;
+      if ((err = der_decode_asn1_identifier(in, &id_len, l)) != CRYPT_OK) {
+         goto error;
       }
-      else if ((type & 0xC0) == 0x80) {
-         /* context-specific, use the 'used' field to store the original identifier */
-         l->used = type;
-         /* context-specific elements are treated as opaque data */
-         type = 0x80;
+      /* read the type byte */
+      identifier = *in;
+
+      /* fetch length */
+      len_len = *inlen - id_len;
+      if ((err = der_decode_asn1_length(&in[id_len], &len_len, &len)) != CRYPT_OK) {
+         goto error;
+      } else if ((len + id_len + len_len) > *inlen) {
+         err = CRYPT_INVALID_PACKET;
+         goto error;
+      }
+      data_offset = id_len + len_len;
+      len += data_offset;
+
+      if (l->type == LTC_ASN1_CUSTOM_TYPE) {
+         /* Custom type, use the 'used' field to store the original identifier */
+         l->used = identifier;
+         if (l->pc == LTC_ASN1_PC_CONSTRUCTED) {
+            /* treat constructed elements like SEQUENCEs */
+            identifier = 0x20;
+         } else {
+            /* primitive elements are treated as opaque data */
+            identifier = 0x80;
+         }
       }
 
      /* now switch on type */
-      switch (type) {
+      switch (identifier) {
          case 0x01: /* BOOLEAN */
-            l->type = LTC_ASN1_BOOLEAN;
+            if (l->type != LTC_ASN1_BOOLEAN) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
+
+            /* init field */
             l->size = 1;
             l->data = XCALLOC(1, sizeof(int));
 
@@ -110,8 +120,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x02: /* INTEGER */
+             if (l->type != LTC_ASN1_INTEGER) {
+                err = CRYPT_PK_ASN1_ERROR;
+                goto error;
+             }
+
              /* init field */
-             l->type = LTC_ASN1_INTEGER;
              l->size = 1;
              if ((err = mp_init(&l->data)) != CRYPT_OK) {
                  goto error;
@@ -129,8 +143,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
              break;
 
          case 0x03: /* BIT */
+            if (l->type != LTC_ASN1_BIT_STRING) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
+
             /* init field */
-            l->type = LTC_ASN1_BIT_STRING;
             l->size = len * 8; /* *8 because we store decoded bits one per char and they are encoded 8 per char.  */
 
             if ((l->data = XCALLOC(1, l->size)) == NULL) {
@@ -148,9 +166,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x04: /* OCTET */
+            if (l->type != LTC_ASN1_OCTET_STRING) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
 
             /* init field */
-            l->type = LTC_ASN1_OCTET_STRING;
             l->size = len;
 
             if ((l->data = XCALLOC(1, l->size)) == NULL) {
@@ -168,6 +189,10 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x05: /* NULL */
+            if (l->type != LTC_ASN1_NULL) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
 
             /* valid NULL is 0x05 0x00 */
             if (in[0] != 0x05 || in[1] != 0x00) {
@@ -176,7 +201,6 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             }
 
             /* simple to store ;-) */
-            l->type = LTC_ASN1_NULL;
             l->data = NULL;
             l->size = 0;
             len     = 2;
@@ -184,9 +208,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x06: /* OID */
+            if (l->type != LTC_ASN1_OBJECT_IDENTIFIER) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
 
             /* init field */
-            l->type = LTC_ASN1_OBJECT_IDENTIFIER;
             l->size = len;
 
             if ((l->data = XCALLOC(len, sizeof(unsigned long))) == NULL) {
@@ -213,7 +240,10 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
          case 0x0C: /* UTF8 */
 
             /* init field */
-            l->type = LTC_ASN1_UTF8_STRING;
+            if (l->type != LTC_ASN1_UTF8_STRING) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
             l->size = len;
 
             if ((l->data = XCALLOC(sizeof(wchar_t), l->size)) == NULL) {
@@ -231,9 +261,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x13: /* PRINTABLE */
+            if (l->type != LTC_ASN1_PRINTABLE_STRING) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
 
             /* init field */
-            l->type = LTC_ASN1_PRINTABLE_STRING;
             l->size = len;
 
             if ((l->data = XCALLOC(1, l->size)) == NULL) {
@@ -251,9 +284,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x14: /* TELETEXT */
+            if (l->type != LTC_ASN1_TELETEX_STRING) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
 
             /* init field */
-            l->type = LTC_ASN1_TELETEX_STRING;
             l->size = len;
 
             if ((l->data = XCALLOC(1, l->size)) == NULL) {
@@ -271,9 +307,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x16: /* IA5 */
+            if (l->type != LTC_ASN1_IA5_STRING) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
 
             /* init field */
-            l->type = LTC_ASN1_IA5_STRING;
             l->size = len;
 
             if ((l->data = XCALLOC(1, l->size)) == NULL) {
@@ -291,9 +330,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x17: /* UTC TIME */
+            if (l->type != LTC_ASN1_UTCTIME) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
 
             /* init field */
-            l->type = LTC_ASN1_UTCTIME;
             l->size = 1;
 
             if ((l->data = XCALLOC(1, sizeof(ltc_utctime))) == NULL) {
@@ -312,7 +354,12 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
             break;
 
          case 0x18:
-            l->type = LTC_ASN1_GENERALIZEDTIME;
+            if (l->type != LTC_ASN1_GENERALIZEDTIME) {
+               err = CRYPT_PK_ASN1_ERROR;
+               goto error;
+            }
+
+            /* init field */
             l->size = len;
 
             if ((l->data = XCALLOC(1, sizeof(ltc_generalizedtime))) == NULL) {
@@ -335,14 +382,23 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
          case 0x31: /* SET */
 
              /* init field */
-             if (type == 0x20) {
-                l->type = LTC_ASN1_CONSTRUCTED;
+             if (identifier == 0x20) {
+               if (l->type != LTC_ASN1_CUSTOM_TYPE) {
+                  err = CRYPT_PK_ASN1_ERROR;
+                  goto error;
+               }
              }
-             else if (type == 0x30) {
-                l->type = LTC_ASN1_SEQUENCE;
+             else if (identifier == 0x30) {
+               if (l->type != LTC_ASN1_SEQUENCE) {
+                  err = CRYPT_PK_ASN1_ERROR;
+                  goto error;
+               }
              }
              else {
-                l->type = LTC_ASN1_SET;
+               if (l->type != LTC_ASN1_SET) {
+                  err = CRYPT_PK_ASN1_ERROR;
+                  goto error;
+               }
              }
 
              if ((l->data = XMALLOC(len)) == NULL) {
@@ -357,7 +413,7 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
              /* jump to the start of the data */
              in     += data_offset;
              *inlen -= data_offset;
-             len = len - data_offset;
+             len    -= data_offset;
 
              /* Sequence elements go as child */
              if ((err = der_decode_sequence_flexi(in, &len, &(l->child))) != CRYPT_OK) {
@@ -376,7 +432,10 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
              break;
 
          case 0x80: /* Context-specific */
-             l->type = LTC_ASN1_CONTEXT_SPECIFIC;
+             if (l->type != LTC_ASN1_CUSTOM_TYPE) {
+                err = CRYPT_PK_ASN1_ERROR;
+                goto error;
+             }
 
              if ((l->data = XCALLOC(1, len - data_offset)) == NULL) {
                 err = CRYPT_MEM;
