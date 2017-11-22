@@ -77,13 +77,30 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
 
       /* fetch length */
       len_len = *inlen - id_len;
+#if defined(LTC_TEST_DBG) && LTC_TEST_DBG > 1
+      data_offset = 666;
+      len = 0;
+#endif
       if ((err = der_decode_asn1_length(&in[id_len], &len_len, &len)) != CRYPT_OK) {
+#if defined(LTC_TEST_DBG) && LTC_TEST_DBG > 1
+         printf("\nE1 %02lx: hl=%4lu l=%4lu - %s (%s)", identifier, data_offset, len, der_asn1_tag_to_string_map[l->tag], error_to_string(err));
+#endif
          goto error;
       } else if ((len + id_len + len_len) > *inlen) {
          err = CRYPT_INVALID_PACKET;
+#if defined(LTC_TEST_DBG) && LTC_TEST_DBG > 1
+         printf("\nE2 %02lx: hl=%4lu l=%4lu - %s (%s)", identifier, data_offset, len, der_asn1_tag_to_string_map[l->tag], error_to_string(err));
+#endif
          goto error;
       }
       data_offset = id_len + len_len;
+#if defined(LTC_TEST_DBG) && LTC_TEST_DBG > 1
+      if (l->type == LTC_ASN1_CUSTOM_TYPE && l->class == LTC_ASN1_CL_CONTEXT_SPECIFIC) {
+         printf("\nOK %02lx: hl=%4lu l=%4lu - Context Specific[%s %llu]", identifier, data_offset, len, der_asn1_pc_to_string_map[l->pc], l->tag);
+      } else {
+         printf("\nOK %02lx: hl=%4lu l=%4lu - %s", identifier, data_offset, len, der_asn1_tag_to_string_map[l->tag]);
+      }
+#endif
       len += data_offset;
 
       if (l->type == LTC_ASN1_CUSTOM_TYPE) {
