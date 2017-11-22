@@ -171,8 +171,6 @@ int der_length_custom_type(ltc_asn1_list *root, unsigned long *outlen, unsigned 
                break;
 
            case LTC_ASN1_CHOICE:
-           case LTC_ASN1_CONSTRUCTED:
-           case LTC_ASN1_CONTEXT_SPECIFIC:
            case LTC_ASN1_EOL:
                err = CRYPT_INVALID_ARG;
                goto LBL_ERR;
