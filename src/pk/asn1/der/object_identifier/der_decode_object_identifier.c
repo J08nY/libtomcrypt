@@ -38,6 +38,7 @@ int der_decode_object_identifier(const unsigned char *in,    unsigned long  inle
 
    /* must be room for at least two words */
    if (*outlen < 2) {
+      *outlen = 2;
       return CRYPT_BUFFER_OVERFLOW;
    }
 
@@ -73,6 +74,7 @@ int der_decode_object_identifier(const unsigned char *in,    unsigned long  inle
       if (!(in[x++] & 0x80)) {
          /* store t */
          if (y >= *outlen) {
+            *outlen = y + 1;
             return CRYPT_BUFFER_OVERFLOW;
          }
          if (y == 0) {

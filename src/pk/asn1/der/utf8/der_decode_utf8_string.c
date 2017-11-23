@@ -91,8 +91,8 @@ int der_decode_utf8_string(const unsigned char *in,  unsigned long inlen,
          tmp = (tmp << 6) | ((wchar_t)in[x++] & 0x3F);
       }
 
-      if (y > *outlen) {
-         *outlen = y;
+      if ((y + 1) > *outlen) {
+         *outlen = y + 1;
          return CRYPT_BUFFER_OVERFLOW;
       }
       out[y++] = tmp;
